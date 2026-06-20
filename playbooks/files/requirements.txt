@@ -1,0 +1,3 @@
+requests>=2.31
+qdrant-client>=1.9
+langfuse>=2.50,<3

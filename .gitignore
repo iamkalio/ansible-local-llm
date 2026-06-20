@@ -1,0 +1,17 @@
+# Real inventory and secrets never get committed
+inventory.yml
+vars/secrets.yml
+.vault-password
+
+# Ansible artifacts
+*.retry
+.ansible/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# not part of the deployable project
+WRITEUP.md
+writeup-automation.md

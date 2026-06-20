@@ -1,0 +1,77 @@
+# {{ ansible_managed }}
+
+services:
+  ollama:
+    image: {{ ollama_image }}
+    container_name: ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"  # keep models warm between requests
+    # The host has no IPv6 route, so disable IPv6 in the container. Otherwise
+    # `ollama pull` resolves AAAA records and stalls on routes that do not exist.
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:{{ ollama_port }}:11434"
+
+  qdrant:
+    image: {{ qdrant_image }}
+    container_name: qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "127.0.0.1:{{ qdrant_port }}:6333"
+
+  # Pipelines hosts the Langfuse filter. It auto-downloads the filter on
+  # first start and reads the Langfuse keys from its environment, so every
+  # chat completion is traced with no manual UI configuration.
+  pipelines:
+    image: {{ pipelines_image }}
+    container_name: pipelines
+    restart: unless-stopped
+    # No IPv6 route on the host; disable it so the filter download uses IPv4.
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    environment:
+      PIPELINES_URLS: "{{ langfuse_filter_url }}"
+      LANGFUSE_PUBLIC_KEY: "{{ langfuse_public_key }}"
+      LANGFUSE_SECRET_KEY: "{{ langfuse_secret_key }}"
+      LANGFUSE_HOST: "{{ langfuse_host }}"
+    volumes:
+      - pipelines_data:/app/pipelines
+
+  openwebui:
+    image: {{ openwebui_image }}
+    container_name: openwebui
+    restart: unless-stopped
+    depends_on: [ollama, qdrant, pipelines]
+    environment:
+      WEBUI_SECRET_KEY: "{{ openwebui_secret_key }}"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      # RAG: documents uploaded in the UI are embedded locally via Ollama
+      # and stored in Qdrant — nothing leaves the box.
+      VECTOR_DB: "qdrant"
+      QDRANT_URI: "http://qdrant:6333"
+      RAG_EMBEDDING_ENGINE: "ollama"
+      RAG_EMBEDDING_MODEL: "{{ embedding_model }}"
+      DEFAULT_MODELS: "{{ chat_model }}"
+      # Register the Pipelines server as an OpenAI-compatible connection so
+      # its Langfuse filter runs on every chat. Chat still executes on Ollama;
+      # the filter only observes. No OpenAI models are exposed (filters don't
+      # register as models), so the model list stays Ollama-only.
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: "http://pipelines:9099"
+      OPENAI_API_KEY: "{{ pipelines_api_key }}"
+    volumes:
+      - openwebui_data:/app/backend/data
+    ports:
+      - "{{ openwebui_port }}:8080"
+
+volumes:
+  ollama_data:
+  qdrant_data:
+  openwebui_data:
+  pipelines_data:

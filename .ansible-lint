@@ -1,0 +1,10 @@
+---
+profile: production
+
+exclude_paths:
+  - .ansible/
+  - .git/
+
+skip_list:
+  # Vault example file intentionally holds placeholder values
+  - vars-should-not-be-used

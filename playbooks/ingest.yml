@@ -1,0 +1,70 @@
+---
+# One-shot document ingestion: ships local .md/.txt files to the server,
+# embeds them via Ollama, and upserts the vectors into Qdrant. Re-running
+# overwrites existing chunks (deterministic IDs) — never duplicates.
+#
+#   ansible-playbook playbooks/ingest.yml --ask-vault-pass -e ingest_docs_dir=~/notes
+- name: Ingest documents into Qdrant
+  hosts: llm_servers
+  become: true
+
+  vars_files:
+    - ../vars/main.yml
+    - ../vars/secrets.yml
+
+  vars:
+    ingest_root: "{{ project_root }}/ingest"
+
+  tasks:
+    - name: Install Python venv support
+      ansible.builtin.apt:
+        name: [python3, python3-venv]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create ingest directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: ["{{ ingest_root }}", "{{ ingest_root }}/docs"]
+
+    - name: Copy documents to the server
+      ansible.builtin.copy:
+        src: "{{ ingest_docs_dir }}/"
+        dest: "{{ ingest_root }}/docs/"
+        mode: "0644"
+
+    - name: Deploy ingest script and requirements
+      ansible.builtin.copy:
+        src: "files/{{ item }}"
+        dest: "{{ ingest_root }}/{{ item }}"
+        mode: "0755"
+      loop: [ingest.py, requirements.txt]
+
+    - name: Render environment file
+      ansible.builtin.template:
+        src: templates/ingest.env.j2
+        dest: "{{ ingest_root }}/ingest.env"
+        mode: "0600"  # contains the Langfuse secret key
+      # Holds secrets — keep its contents out of console/log output.
+      no_log: true
+
+    - name: Install Python dependencies into a virtualenv
+      ansible.builtin.pip:
+        requirements: "{{ ingest_root }}/requirements.txt"
+        virtualenv: "{{ ingest_root }}/.venv"
+        virtualenv_command: python3 -m venv
+
+    - name: Run ingestion
+      ansible.builtin.shell: >
+        set -a && . {{ ingest_root }}/ingest.env && set +a &&
+        {{ ingest_root }}/.venv/bin/python {{ ingest_root }}/ingest.py
+        --docs-dir {{ ingest_root }}/docs
+      register: ingest_run
+      changed_when: "'upserted' in ingest_run.stdout"
+
+    - name: Show ingestion summary
+      ansible.builtin.debug:
+        msg: "{{ ingest_run.stdout_lines[-5:] }}"

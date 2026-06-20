@@ -1,0 +1,10 @@
+---
+# Copy to inventory.yml (gitignored) and fill in your machine's details.
+all:
+  children:
+    llm_servers:
+      hosts:
+        askmydocs:
+          ansible_host: 192.0.2.10
+          ansible_user: ubuntu
+          # ansible_ssh_private_key_file: ~/.ssh/id_ed25519

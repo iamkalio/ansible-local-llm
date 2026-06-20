@@ -1,0 +1,55 @@
+---
+# All tunables for the stack live here. Secrets live in vars/secrets.yml (vaulted).
+
+project_root: /opt/ask-my-docs
+
+# ── Images (pinned: upgrades are a deliberate change in git) ────────────
+ollama_image: ollama/ollama:0.9.0
+qdrant_image: qdrant/qdrant:v1.14.1
+openwebui_image: ghcr.io/open-webui/open-webui:v0.6.13
+# Pipelines runs the Langfuse filter that traces chat. Upstream publishes no
+# semver tags, so this tracks the maintained branch — pin to a digest if you
+# want byte-for-byte reproducibility.
+pipelines_image: ghcr.io/open-webui/pipelines:main
+
+# ── Ports ───────────────────────────────────────────────────────────────
+# Only Open WebUI is exposed publicly; Ollama and Qdrant bind to localhost.
+openwebui_port: 3000
+ollama_port: 11434
+qdrant_port: 6333
+
+# ── Models ──────────────────────────────────────────────────────────────
+# Sized for CPU-only inference on a dual-core machine. Llama 3.2 3B (~2 GB)
+# follows instructions well and is ideal for RAG, where retrieved context
+# does the heavy lifting. For snappier replies on weak hardware, drop to
+# llama3.2:1b-instruct-q4_K_M (~0.8 GB); for better answers if you find the
+# CPU keeps up, step up to qwen2.5:7b-instruct-q4_K_M.
+chat_model: llama3.2:3b-instruct-q4_K_M
+embedding_model: nomic-embed-text
+ollama_models:
+  - "{{ chat_model }}"
+  - "{{ embedding_model }}"
+
+# ── Langfuse (cloud) ────────────────────────────────────────────────────
+langfuse_host: https://cloud.langfuse.com
+# Chat tracing: the Pipelines container auto-loads this filter on startup and
+# logs every chat completion (prompt, response, latency, retrieved docs) to
+# Langfuse using the keys in secrets.yml.
+langfuse_filter_url: https://raw.githubusercontent.com/open-webui/pipelines/main/examples/filters/langfuse_filter_pipeline.py
+# Default auth key Open WebUI uses to talk to the Pipelines server. Not a
+# secret in any meaningful sense — it only guards an internal-network port.
+pipelines_api_key: "0p3n-w3bu!"
+
+# ── Ingestion ───────────────────────────────────────────────────────────
+# Local directory (on YOUR laptop) of .md/.txt files to embed into Qdrant.
+# Override per run: -e ingest_docs_dir=~/notes
+ingest_docs_dir: "{{ playbook_dir }}/../docs-sample"
+qdrant_collection: ask_my_docs
+chunk_size: 800
+chunk_overlap: 120
+
+# ── Derived (no need to touch) ──────────────────────────────────────────
+stack_health_endpoints:
+  - { name: ollama, url: "http://127.0.0.1:{{ ollama_port }}/api/version" }
+  - { name: qdrant, url: "http://127.0.0.1:{{ qdrant_port }}/readyz" }
+  - { name: openwebui, url: "http://127.0.0.1:{{ openwebui_port }}/health" }
