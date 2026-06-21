@@ -15,3 +15,5 @@ __pycache__/
 # not part of the deployable project
 WRITEUP.md
 writeup-automation.md
+article.md
+article-observability.md
