@@ -1,21 +1,9 @@
 # {{ ansible_managed }}
+#
+# The AI stack: the application layer. It reaches the model only through the
+# LiteLLM gateway in the platform layer, over the shared external network.
 
 services:
-  ollama:
-    image: {{ ollama_image }}
-    container_name: ollama
-    restart: unless-stopped
-    environment:
-      OLLAMA_KEEP_ALIVE: "30m"  # keep models warm between requests
-    # The host has no IPv6 route, so disable IPv6 in the container. Otherwise
-    # `ollama pull` resolves AAAA records and stalls on routes that do not exist.
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "127.0.0.1:{{ ollama_port }}:11434"
-
   qdrant:
     image: {{ qdrant_image }}
     container_name: qdrant
@@ -47,31 +35,37 @@ services:
     image: {{ openwebui_image }}
     container_name: openwebui
     restart: unless-stopped
-    depends_on: [ollama, qdrant, pipelines]
+    depends_on: [qdrant, pipelines]
     environment:
       WEBUI_SECRET_KEY: "{{ openwebui_secret_key }}"
-      OLLAMA_BASE_URL: "http://ollama:11434"
-      # RAG: documents uploaded in the UI are embedded locally via Ollama
-      # and stored in Qdrant — nothing leaves the box.
+      # All model traffic goes through the LiteLLM gateway (platform layer),
+      # never straight to Ollama. The direct Ollama backend is disabled.
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAI_API: "true"
+      # Two OpenAI connections: LiteLLM provides the chat models; Pipelines
+      # carries the Langfuse filter (a filter applies to all models).
+      OPENAI_API_BASE_URLS: "http://litellm:4000/v1;http://pipelines:9099"
+      OPENAI_API_KEYS: "{{ litellm_master_key }};{{ pipelines_api_key }}"
+      DEFAULT_MODELS: "{{ litellm_chat_alias }}"
+      # RAG: documents are stored in Qdrant; embeddings also go through
+      # LiteLLM (openai engine), so the gateway is the only path to the model.
       VECTOR_DB: "qdrant"
       QDRANT_URI: "http://qdrant:6333"
-      RAG_EMBEDDING_ENGINE: "ollama"
-      RAG_EMBEDDING_MODEL: "{{ embedding_model }}"
-      DEFAULT_MODELS: "{{ chat_model }}"
-      # Register the Pipelines server as an OpenAI-compatible connection so
-      # its Langfuse filter runs on every chat. Chat still executes on Ollama;
-      # the filter only observes. No OpenAI models are exposed (filters don't
-      # register as models), so the model list stays Ollama-only.
-      ENABLE_OPENAI_API: "true"
-      OPENAI_API_BASE_URL: "http://pipelines:9099"
-      OPENAI_API_KEY: "{{ pipelines_api_key }}"
+      RAG_EMBEDDING_ENGINE: "openai"
+      RAG_OPENAI_API_BASE_URL: "http://litellm:4000/v1"
+      RAG_OPENAI_API_KEY: "{{ litellm_master_key }}"
+      RAG_EMBEDDING_MODEL: "{{ litellm_embed_alias }}"
     volumes:
       - openwebui_data:/app/backend/data
     ports:
       - "{{ openwebui_port }}:8080"
 
 volumes:
-  ollama_data:
   qdrant_data:
   openwebui_data:
   pipelines_data:
+
+networks:
+  default:
+    name: {{ docker_network }}
+    external: true

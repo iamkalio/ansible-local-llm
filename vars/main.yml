@@ -1,7 +1,9 @@
 ---
 # All tunables for the stack live here. Secrets live in vars/secrets.yml (vaulted).
 
-project_root: /opt/ask-my-docs
+project_root: /opt/ask-my-docs              # AI stack
+platform_root: /opt/ask-my-docs-platform    # inference platform
+docker_network: llm_net
 
 # ── Images (pinned: upgrades are a deliberate change in git) ────────────
 ollama_image: ollama/ollama:0.9.0
@@ -11,24 +13,31 @@ openwebui_image: ghcr.io/open-webui/open-webui:v0.6.13
 # semver tags, so this tracks the maintained branch — pin to a digest if you
 # want byte-for-byte reproducibility.
 pipelines_image: ghcr.io/open-webui/pipelines:main
+# LiteLLM gateway and its backing database. litellm tracks the stable tag;
+# pin to a version (e.g. ghcr.io/berriai/litellm:v1.xx-stable) for repeatability.
+litellm_image: ghcr.io/berriai/litellm:main-stable
+litellm_db_image: postgres:16-alpine
 
 # ── Ports ───────────────────────────────────────────────────────────────
-# Only Open WebUI is exposed publicly; Ollama and Qdrant bind to localhost.
+# Open WebUI (chat) and LiteLLM (the model gateway/API) are exposed; Ollama
+# and Qdrant bind to localhost and are only reached over the compose network.
 openwebui_port: 3000
+litellm_port: 4000
 ollama_port: 11434
 qdrant_port: 6333
 
 # ── Models ──────────────────────────────────────────────────────────────
-# Sized for CPU-only inference on a dual-core machine. Llama 3.2 3B (~2 GB)
-# follows instructions well and is ideal for RAG, where retrieved context
-# does the heavy lifting. For snappier replies on weak hardware, drop to
-# llama3.2:1b-instruct-q4_K_M (~0.8 GB); for better answers if you find the
-# CPU keeps up, step up to qwen2.5:7b-instruct-q4_K_M.
 chat_model: llama3.2:3b-instruct-q4_K_M
 embedding_model: nomic-embed-text
 ollama_models:
   - "{{ chat_model }}"
   - "{{ embedding_model }}"
+
+# ── Platform: LiteLLM gateway ───────────────────────────────────────────
+
+litellm_chat_alias: local-chat
+litellm_embed_alias: local-embed
+litellm_ui_username: admin
 
 # ── Langfuse (cloud) ────────────────────────────────────────────────────
 langfuse_host: https://cloud.langfuse.com
@@ -49,7 +58,10 @@ chunk_size: 800
 chunk_overlap: 120
 
 # ── Derived (no need to touch) ──────────────────────────────────────────
-stack_health_endpoints:
+# Health gates, split by deploy unit.
+platform_health_endpoints:
   - { name: ollama, url: "http://127.0.0.1:{{ ollama_port }}/api/version" }
+  - { name: litellm, url: "http://127.0.0.1:{{ litellm_port }}/health/liveliness" }
+stack_health_endpoints:
   - { name: qdrant, url: "http://127.0.0.1:{{ qdrant_port }}/readyz" }
   - { name: openwebui, url: "http://127.0.0.1:{{ openwebui_port }}/health" }

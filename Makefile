@@ -1,4 +1,4 @@
-.PHONY: setup ping encrypt deploy check ingest lint
+.PHONY: setup ping encrypt platform deploy up check ingest lint
 
 # One-time local setup: install required Ansible collections + roles
 setup:
@@ -12,13 +12,21 @@ ping:
 encrypt:
 	ansible-vault encrypt vars/secrets.yml
 
-# Deploy the full stack. Assumes passwordless sudo on the server; only the
-# vault password is prompted (--ask-vault-pass). If your user needs a sudo
-# password, add -K to these commands.
+# Deploy the inference platform (Ollama + LiteLLM + Postgres).
+# Assumes passwordless sudo; add -K if your user needs a sudo password.
+platform:
+	ansible-playbook platform/platform.yml --ask-vault-pass
+
+# Deploy the AI stack (Open WebUI + Qdrant + Pipelines).
 deploy:
 	ansible-playbook playbooks/deploy.yml --ask-vault-pass
 
-# Dry-run the deploy
+# Bring up everything in order: platform first, then the AI stack.
+up:
+	$(MAKE) platform
+	$(MAKE) deploy
+
+# Dry-run the AI stack deploy
 check:
 	ansible-playbook playbooks/deploy.yml --ask-vault-pass --check --diff
 

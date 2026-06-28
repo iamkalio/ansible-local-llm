@@ -1,0 +1,82 @@
+---
+# Deploys the inference platform: the shared network, Ollama, the LiteLLM
+# gateway, and its Postgres. Idempotent — safe to re-run any time.
+#
+#   ansible-playbook platform/platform.yml --ask-vault-pass
+- name: Deploy inference platform
+  hosts: llm_servers
+  become: true
+
+  vars_files:
+    - ../vars/main.yml
+    - ../vars/secrets.yml
+
+  roles:
+    # Installs Docker + Compose so the playbook works on a fresh box; a no-op
+    # where Docker already exists.
+    - role: geerlingguy.docker
+      vars:
+        docker_install_compose_plugin: true
+
+  tasks:
+    - name: Ensure the shared Docker network exists
+      community.docker.docker_network:
+        name: "{{ docker_network }}"
+        state: present
+
+    - name: Create platform directory
+      ansible.builtin.file:
+        path: "{{ platform_root }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render LiteLLM gateway config
+      ansible.builtin.template:
+        src: templates/litellm-config.yaml.j2
+        dest: "{{ platform_root }}/litellm-config.yaml"
+        mode: "0644"  # no secrets here; keys/DB come from the environment
+
+    - name: Render platform docker-compose.yml
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ platform_root }}/docker-compose.yml"
+        mode: "0600"  # contains LiteLLM and Postgres secrets
+      no_log: true  # keep secret values out of console/log output
+
+    - name: Start the platform
+      community.docker.docker_compose_v2:
+        project_src: "{{ platform_root }}"
+        state: present
+        remove_orphans: true
+
+    - name: Wait for Ollama and LiteLLM to become healthy
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+      register: health
+      until: health.status == 200
+      retries: 60  # litellm runs DB migrations on first boot
+      delay: 5
+      loop: "{{ platform_health_endpoints }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # ── Models: pull only what isn't on disk yet ────────────────────────
+    - name: List models already on disk
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ ollama_port }}/api/tags"
+      register: ollama_tags
+
+    - name: Pull missing models (first run downloads the model, be patient)
+      ansible.builtin.command:
+        argv: [docker, exec, ollama, ollama, pull, "{{ item }}"]
+      vars:
+        models_on_disk: "{{ ollama_tags.json.models | default([]) | map(attribute='name') | list }}"
+      when: item not in models_on_disk and (item ~ ':latest') not in models_on_disk
+      loop: "{{ ollama_models }}"
+      changed_when: true
+      async: 1800
+      poll: 15
+
+    - name: Show platform endpoint
+      ansible.builtin.debug:
+        msg: "LiteLLM API + admin UI: http://{{ ansible_host }}:{{ litellm_port }} (UI at /ui, log in as {{ litellm_ui_username }})"

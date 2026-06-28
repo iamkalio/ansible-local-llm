@@ -1,0 +1,70 @@
+# {{ ansible_managed }}
+#
+# The inference platform: the model gateway, the runtime, and its database.
+# Everything that wants the model goes through LiteLLM, so auth, rate limits,
+# routing, and spend tracking apply in one place. Joins the shared external
+# network so the AI stack can reach litellm by name.
+
+services:
+  ollama:
+    image: {{ ollama_image }}
+    container_name: ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"  # keep models warm between requests
+    # The host has no IPv6 route, so disable IPv6 in the container. Otherwise
+    # `ollama pull` resolves AAAA records and stalls on routes that do not exist.
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    volumes:
+      - ollama_data:/root/.ollama
+    # Localhost only: reached over the network as ollama:11434, plus the host
+    # port for the model-pull and health tasks in the platform playbook.
+    ports:
+      - "127.0.0.1:{{ ollama_port }}:11434"
+
+  litellm-db:
+    image: {{ litellm_db_image }}
+    container_name: litellm-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: "{{ litellm_postgres_password }}"
+      POSTGRES_DB: litellm
+    volumes:
+      - litellm_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  litellm:
+    image: {{ litellm_image }}
+    container_name: litellm
+    restart: unless-stopped
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: "{{ litellm_master_key }}"
+      LITELLM_SALT_KEY: "{{ litellm_salt_key }}"
+      DATABASE_URL: "postgresql://litellm:{{ litellm_postgres_password }}@litellm-db:5432/litellm"
+      UI_USERNAME: "{{ litellm_ui_username }}"
+      UI_PASSWORD: "{{ litellm_ui_password }}"
+    volumes:
+      - "{{ platform_root }}/litellm-config.yaml:/app/config.yaml:ro"
+    ports:
+      - "{{ litellm_port }}:4000"
+
+volumes:
+  ollama_data:
+  litellm_db_data:
+
+networks:
+  default:
+    name: {{ docker_network }}
+    external: true

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Ingest .md/.txt documents into Qdrant using Ollama embeddings.
+"""Ingest .md/.txt documents into Qdrant, embedding through LiteLLM.
 
 Reads every file under --docs-dir, splits it into overlapping
-chunks, embeds each chunk via the local Ollama embedding endpoint, and
-upserts the vectors into a Qdrant collection.
+chunks, embeds each chunk through the LiteLLM gateway (OpenAI-compatible
+/v1/embeddings), and upserts the vectors into a Qdrant collection.
 
 Idempotent by construction: point IDs are deterministic (UUIDv5 of file path
 + chunk index), so re-running over the same documents overwrites the same
@@ -26,10 +26,11 @@ import requests
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+LITELLM_URL = os.environ.get("LITELLM_URL", "http://127.0.0.1:4000")
+LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "local-embed")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION = os.environ.get("QDRANT_COLLECTION", "ask_my_docs")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "800"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "120"))
 EMBED_BATCH_SIZE = 16
@@ -77,14 +78,15 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
 
 
 def embed(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts via Ollama's /api/embed endpoint."""
+    """Embed a batch of texts through LiteLLM's OpenAI-compatible endpoint."""
     resp = requests.post(
-        f"{OLLAMA_URL}/api/embed",
-        json={"model": EMBEDDING_MODEL, "input": texts},
+        f"{LITELLM_URL}/v1/embeddings",
+        headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+        json={"model": EMBED_MODEL, "input": texts},
         timeout=300,
     )
     resp.raise_for_status()
-    return resp.json()["embeddings"]
+    return [item["embedding"] for item in resp.json()["data"]]
 
 
 def ensure_collection(client: QdrantClient, vector_size: int) -> None:

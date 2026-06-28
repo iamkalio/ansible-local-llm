@@ -1,9 +1,11 @@
 ---
-# Deploys the full stack: Docker → compose up → pull models.
-# Idempotent — safe to re-run any time.
+# Deploys the AI stack: Open WebUI, Qdrant, and Pipelines. The inference
+# platform (Ollama + LiteLLM) is deployed separately by platform/platform.yml;
+# this stack reaches it over the shared network. Idempotent.
 #
-#   ansible-playbook playbooks/deploy.yml --ask-vault-pass
-- name: Deploy Ask My Docs stack
+#   ansible-playbook platform/platform.yml --ask-vault-pass   # first
+#   ansible-playbook playbooks/deploy.yml  --ask-vault-pass   # then this
+- name: Deploy Ask My Docs AI stack
   hosts: llm_servers
   become: true
 
@@ -13,14 +15,17 @@
 
   roles:
     # Installs Docker + Compose so the playbook works on a fresh box; a no-op
-    # where Docker already exists. We don't set docker_daemon_options, so the
-    # role leaves an existing daemon.json (and the running daemon) untouched.
+    # where Docker already exists.
     - role: geerlingguy.docker
       vars:
         docker_install_compose_plugin: true
 
   tasks:
-    # ── The stack: one compose file, reconciled by compose itself ──────
+    - name: Ensure the shared Docker network exists
+      community.docker.docker_network:
+        name: "{{ docker_network }}"
+        state: present
+
     - name: Create project directory
       ansible.builtin.file:
         path: "{{ project_root }}"
@@ -31,10 +36,8 @@
       ansible.builtin.template:
         src: templates/docker-compose.yml.j2
         dest: "{{ project_root }}/docker-compose.yml"
-        mode: "0600"  # contains the Open WebUI session + Langfuse secrets
-      # Suppress diff/output: the rendered file holds secrets and must not be
-      # printed to the console or any log (e.g. under --diff or in CI).
-      no_log: true
+        mode: "0600"  # contains the Open WebUI session + Langfuse + LiteLLM keys
+      no_log: true  # keep secret values out of console/log output
 
     - name: Start the stack
       community.docker.docker_compose_v2:
@@ -42,7 +45,7 @@
         state: present
         remove_orphans: true
 
-    - name: Wait for every service to become healthy
+    - name: Wait for the stack to become healthy
       ansible.builtin.uri:
         url: "{{ item.url }}"
       register: health
@@ -53,23 +56,8 @@
       loop_control:
         label: "{{ item.name }}"
 
-    # ── Models: pull only what isn't on disk yet ────────────────────────
-    - name: List models already on disk
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ ollama_port }}/api/tags"
-      register: ollama_tags
-
-    - name: Pull missing models (first run downloads the model, be patient)
-      ansible.builtin.command:
-        argv: [docker, exec, ollama, ollama, pull, "{{ item }}"]
-      vars:
-        models_on_disk: "{{ ollama_tags.json.models | default([]) | map(attribute='name') | list }}"
-      when: item not in models_on_disk and (item ~ ':latest') not in models_on_disk
-      loop: "{{ ollama_models }}"
-      changed_when: true
-      async: 1800
-      poll: 15
-
     - name: Show endpoints
       ansible.builtin.debug:
-        msg: "Open WebUI is up at http://{{ ansible_host }}:{{ openwebui_port }} — first signup becomes admin."
+        msg:
+          - "Open WebUI: http://{{ ansible_host }}:{{ openwebui_port }} (first signup becomes admin)"
+          - "Models and inference are served by the platform via LiteLLM."

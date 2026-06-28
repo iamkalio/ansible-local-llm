@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+#
+# LiteLLM gateway config. Clients call the aliases under model_list; LiteLLM
+# routes them to the Ollama models behind the scenes. Keys, teams, users, and
+# spend live in Postgres (general_settings.database_url) and are managed from
+# the admin UI at /ui, so they are not configured here.
+
+model_list:
+  - model_name: {{ litellm_chat_alias }}
+    litellm_params:
+      model: ollama_chat/{{ chat_model }}
+      api_base: http://ollama:11434
+  - model_name: {{ litellm_embed_alias }}
+    litellm_params:
+      model: ollama/{{ embedding_model }}
+      api_base: http://ollama:11434
+  # Add more aliases or providers here. To enable fallbacks, point a second
+  # entry at the same model_name and set litellm_settings.fallbacks.
+
+litellm_settings:
+  drop_params: true        # tolerate OpenAI params Ollama does not support
+  num_retries: 2
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true  # let models and keys be managed from the UI/DB
